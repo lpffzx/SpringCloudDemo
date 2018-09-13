@@ -1,0 +1,310 @@
+============ spring-cloud-demo ============
+
+包含 spring cloud 部分核心组件 的 微服务框架 demo 示例，不包含任何具体业务工程，旨在帮助大家可以
+方便，快速的启动自己的spring cloud 工程。
+
+本 demo 包含的 spring cloud 核心组建有：
+
+eureka-server-demo:             spring cloud eureka             服务注册发现中心
+zuul-server-demo:               spring cloud zuul               网关服务，路由，过滤
+config-server-demo:             spring cloud config             配置中心
+hystrix-dashboard-turbine-demo: spring cloud hystrix            断路器
+                                spring cloud hystrix dashboard  断路器监控面板
+                                spring cloud turbine            断路器监控聚合
+zipkin.jar                      spring cloud sleuth/zipkin      链路追踪
+
+============ eureka-server-demo =============
+
+服务注册发现中心
+
+主要负责服务注册和发现，当服务注册到eureka后，可以使用实例id来获取相应服务，同时可以利用eureka实现
+服务高可用。
+
+关键用法：
+
+eureka 服务端：
+
+依赖：
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-netflix-eureka-server</artifactId>
+		</dependency>
+注解：
+        @EnableEurekaServer
+配置：
+        eureka:
+          instance:
+            hostname: localhost
+          client:
+            registerWithEureka: false
+            fetchRegistry: false
+            serviceUrl:
+              defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
+
+eureka 客户端：
+
+依赖：
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+		</dependency>
+注解：
+        @EnableEurekaClient
+配置：
+        eureka:
+          client:
+            serviceUrl:
+              defaultZone: http://localhost:9000/eureka/
+          instance:
+            prefer-ip-address: true
+            instanceId: ${spring.application.name}:${spring.cloud.client.ip-address}:${spring.application.instance_id:${server.port}}
+
+============ zuul-server-demo =============
+
+网关服务
+
+访问微服务统一入口，负责根据url将请求分发给对应的服务，同时过滤器功能可以对所有请求进行统一鉴权处理，
+日志处理，异常处理等，不需要再每个特定服务中单独处理了。
+
+关键用法：
+
+依赖：
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-netflix-zuul</artifactId>
+		</dependency>
+注解：
+        @EnableZuulProxy
+配置：
+        zuul:
+          routes:
+            demo:
+              path: /demo/**
+              serviceId: demo-service
+
+============ config-server-demo =============
+
+配置中心
+
+负责管理微服务架构中所有服务的配置文件，将所有服务的配置文件放置在特定 git 库中管理，服务启动时通过
+config-server 获取自己的配置，config-server 负责从指定 git 库中获取对应的配置文件，给到对应服务，
+当配置文件需要更改时，可以很方便的在 git 库中修改对应文件，相应的服务无需重新发布，即可立即刷新生效。
+
+关键用法：
+
+config 服务端：
+
+依赖：
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-config-server</artifactId>
+		</dependency>
+注解：
+        @EnableConfigServer
+配置：
+        spring:
+          cloud:
+            config:
+              server:
+                git:
+                  uri: https://github.com/url/repository/
+                  search-paths: path
+                  username: your username
+                  password: your password
+              label: master
+
+config 客户端（从配置中心获取配置的服务都是客户端）：
+依赖：
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-config</artifactId>
+		</dependency>
+注解：
+        如果配置文件中有自定义参数，如需要动态刷新，则需要在用到的类中添加：
+
+        @RefreshScope
+
+        获取参数方法：
+
+        @Value("${foo}")
+        String foo;
+配置：
+        首先，作为 config server 的消费者，本地是不存在 application.yml 配置文件的，但是仍然要配置 config server 的信息来知道去
+        哪里获取配置，这时需要创建 bootstrap.yml 配置文件，与 application.yml 的区别是，bootstrap.yml 的启动有限级更高。
+
+        如果配置中心注册到服务发现中心，也就是说 config server 注册到了 eureka server，可以通过服务id访问 config server 获取配置，
+        这时候，需要将 eureka server 配置添加进去，否则无法通过服务id访问配置中心。
+
+        eureka:
+          client:
+            serviceUrl:
+              defaultZone: http://localhost:9000/eureka/
+          instance:
+            prefer-ip-address: true
+            instanceId: ${spring.application.name}:${spring.cloud.client.ip-address}:${spring.application.instance_id:${server.port}}
+
+        如果配置中心并没有注册到服务发现中心，也就是说 config server 作为独立的服务，其实是不影响功能的，只是无法实现高可用（集群），
+        这时，config 客户端需要通过 url 连接来访问配置中心，那就不需要讲 eureka server 配置放进 bootstrap.yml 配置文件中，只需要添加
+        config server 相关信息：
+
+        spring:
+          cloud:
+            config:
+              label: master
+              discovery:
+                enabled: true
+                serviceId: config-server-demo
+
+============= hystrix-dashboard-turbine-demo ==============
+
+断路器监控聚合
+
+这个项目包含了三部分，一个是断路器，第二是断路器监控，第三监控聚合
+
+这个demo直接实现了统一监控，最兼容的方式，不再单独对每个业务工程实现监控。
+
+----------------- hystrix 断路器 ---------------------
+
+当微服务框架中，某个服务出现问题，调用此服务的请求超时报错，有可能导致堵塞甚至将服务器资源耗尽导致整个微服务崩溃，断路器的作用是，当微服务间
+调用出现问题时，迅速返回错误，或者一个自定义的结果，避免堵塞和连锁反应。
+
+关键用法：
+
+一般存在与与业务相关的spring boot项目中
+
+依赖：
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-netflix-hystrix</artifactId>
+		</dependency>
+配置：
+        feign:
+          hystrix:
+            enabled: true
+
+------------------ hystrix dashboard 断路器监控 ------------------
+
+提供了一个监控面板，可以很直观的看到微服务间互相调用时的请求状况，如不同的请求服务，各自请求数量，成功数，失败数等等。
+
+关键用法：
+
+依赖：
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-netflix-hystrix-dashboard</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+注解：
+        @EnableHystrixDashboard
+
+可以为每个服务单独添加依赖，并监控，只需访问：
+
+        http://localhost:业务服务端口/hystrix
+
+在页面中输入：
+
+        http://localhost:业务服务端口/hystrix.stream
+
+点击 Monitor Stream 即可
+
+------------------ turbine 监控聚合 ---------------------
+
+当项目复杂，业务拆分较多，分成不同 spring boot 项目，这时仅仅使用上面 hystrix dashboard 单独监控就显得很不方便，需要维护多个监控页面。
+使用 turbine 可以单独创建一个 spring boot 项目，有自己的端口，将需要监控的服务的断路器监控信息收集起来，展示在同一个页面，方便管理和查看。
+
+关键用法：
+
+依赖：
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-netflix-turbine</artifactId>
+		</dependency>
+注解：
+        @EnableTurbine
+配置：
+        turbine:
+          aggregator:
+            clusterConfig: default
+          appConfig: demo-service   // 在这里配置需要收集哪些服务的监控
+          clusterNameExpression: new String("default")
+
+访问监控页面：
+
+        http://localhost:监控服务端口/hystrix
+
+在页面中输入：
+
+        http://localhost:监控服务端口/turbine.stream
+
+点击 Monitor Stream 即可
+
+由于 spring cloud 版本原因，需要在每个被监控的服务中添加一个 配置类 HystrixConfig：
+
+@Configuration
+public class HystrixConfig {
+
+    @Bean
+    public ServletRegistrationBean getServlet() {
+        HystrixMetricsStreamServlet streamServlet = new HystrixMetricsStreamServlet();
+        ServletRegistrationBean registrationBean = new ServletRegistrationBean(streamServlet);
+        registrationBean.setLoadOnStartup(1);
+        List<String> urlMappings = new ArrayList<>();
+        urlMappings.add("/actuator/hystrix.stream");    // 版本导致 监控 url 变了
+        registrationBean.setUrlMappings(urlMappings);
+        registrationBean.setName("HystrixMetricsStreamServlet");
+        return registrationBean;
+    }
+}
+
+这样才能收集到
+
+=============== zipkin.jar =====================
+
+微服务中请求的链路追踪，可以记录请求的逻辑顺序，和每一步的时间，生成日志，有监控页面可以监控，非常方便。
+
+对于 zipkin 的服务端，也就是收集端，监控页面端，这个可以自己创建 spring boot 项目来实现，但是官方有提供官方版的 zipkin.jar，所以肯定是
+使用最方便且最官方的东西了，下载、启动方式：
+
+        curl -sSL https://zipkin.io/quickstart.sh | bash -s
+        java -jar zipkin.jar
+
+默认端口：9411
+
+访问如下地址：
+
+        http://localhost:9411/zipkin
+官网：
+        https://zipkin.io
+
+即可打开监控面板，可以很清晰地看到每个请求的用时，是否成功，包括请求每一步的用时。
+
+zipkin 有个问题就是无法持久化，链路数据，每次重启即丢失之前数据，如果想要持久化，可以添加启动参数，支持使用数据库，ES等方式保存数据。可以
+自己拓展一下。
+
+
+作为 zipkin 的消费端，也就是业务服务，会产生链路日志的项目，需要做些修改来实现链路追踪。
+
+关键用法：
+
+业务服务：
+
+依赖：
+	    <dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-sleuth</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-sleuth-zipkin</artifactId>
+		</dependency>
+配置：
+        spring:
+          zipkin:
+            base-url: http://localhost:9411       // zipkin 服务端的地址
+          sleuth:
+            sampler.probability: 1                // 设置采样比，1 表示获取所有请求链路信息，不丢失任何信息
+
